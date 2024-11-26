@@ -31,6 +31,10 @@ trainfolderRawPng = './trainrawpng/'
 trainfolderCompYuv = './traincompyuv/'
 trainfolderCompPng = './traincomppng/'
 
+for p in [testfolderRawPng, testfolderCompPng, trainfolderRawPng, trainfolderCompPng]:
+    if not os.path.exists(p): os.makedirs(p)
+        
+
 def cal_psnr(img_orig, img_out):
     squared_error = np.square(img_orig - img_out)
     mse = np.mean(squared_error)
@@ -152,30 +156,51 @@ def psnr(y_true, y_pred):
     return psnr
 
 
-def EnhancerModel (fw,fh):
-    comp_tensor = layers.Input(shape=(fh, fw, 3))
-    conv_1 = layers.Conv2D(filters=128, kernel_size=[9, 9], padding="same", name='conv_1')(comp_tensor)
-    conv_1 = layers.PReLU(name='prelu_1', shared_axes=[1, 2])(conv_1)
-    conv_2 = layers.Conv2D(filters=64, kernel_size=[7, 7], padding="same", name='conv_2')(conv_1)
-    conv_2 = layers.PReLU(name='prelu_2', shared_axes=[1, 2])(conv_2)
-    conv_3 = layers.Conv2D(filters=64, kernel_size=[3, 3], padding="same", name='conv_3')(conv_2)
-    conv_3 = layers.PReLU(name='prelu_3', shared_axes=[1, 2])(conv_3)
-    conv_4 = layers.Conv2D(filters=32, kernel_size=[1, 1], padding="same", name='conv_4')(conv_3)
-    conv_4 = layers.PReLU(name='prelu_4', shared_axes=[1, 2])(conv_4)
-    conv_11 = layers.Conv2D(filters=128, kernel_size=[9, 9], padding="same", name='conv_6')(comp_tensor)
-    conv_11 = layers.PReLU(name='prelu_6', shared_axes=[1, 2])(conv_11)
-    feat_11 = concatenate([conv_1, conv_11], axis=-1)
-    conv_22 = layers.Conv2D(filters=64, kernel_size=[7, 7], padding="same", name='conv_7')(feat_11)
-    conv_22 = layers.PReLU(name='prelu_7', shared_axes=[1, 2])(conv_22)
-    feat_22 = concatenate([conv_2, conv_22], axis=-1)
-    conv_33 = layers.Conv2D(filters=64, kernel_size=[3, 3], padding="same", name='conv_8')(feat_22)
-    conv_33 = layers.PReLU(name='prelu_8', shared_axes=[1, 2])(conv_33)
-    feat_33 = concatenate([conv_3, conv_33], axis=-1)
-    conv_44 = layers.Conv2D(filters=32, kernel_size=[1, 1], padding="same", name='conv_9')(feat_33)
-    conv_44 = layers.PReLU(name='prelu_9', shared_axes=[1, 2])(conv_44)
-    feat_44 = concatenate([conv_4, conv_44], axis=-1)
-    conv_10 = layers.Conv2D(filters=3, kernel_size=[5, 5], padding="same", name='conv_out')(feat_44)
-    output_tensor = comp_tensor + conv_10
+def EnhancerModel(fw, fh):
+    comp_tensor = layers.Input(shape=(fh, fw, 3))  # 输入图像
+
+    # 第一个卷积块
+    conv_1 = layers.Conv2D(filters=128, kernel_size=(9, 9), padding="same", name='conv_1')(comp_tensor)
+    conv_1 = layers.PReLU(shared_axes=[1, 2], name='prelu_1')(conv_1)
+    
+    # 第二个卷积块
+    conv_2 = layers.Conv2D(filters=64, kernel_size=(7, 7), padding="same", name='conv_2')(conv_1)
+    conv_2 = layers.PReLU(shared_axes=[1, 2], name='prelu_2')(conv_2)
+
+    # 使用空洞卷积来增大感受野
+    conv_3 = layers.Conv2D(filters=64, kernel_size=(3, 3), padding="same", dilation_rate=2, name='conv_3')(conv_2)
+    conv_3 = layers.PReLU(shared_axes=[1, 2], name='prelu_3')(conv_3)
+    
+    # 1x1卷积降维
+    conv_4 = layers.Conv2D(filters=32, kernel_size=(1, 1), padding="same", name='conv_4')(conv_3)
+    conv_4 = layers.PReLU(shared_axes=[1, 2], name='prelu_4')(conv_4)
+
+    # 通过使用残差学习来改善性能
+    conv_11 = layers.Conv2D(filters=128, kernel_size=(9, 9), padding="same", name='conv_11')(comp_tensor)
+    conv_11 = layers.PReLU(shared_axes=[1, 2], name='prelu_11')(conv_11)
+    
+    # 多尺度特征融合
+    feat_11 = layers.concatenate([conv_1, conv_11], axis=-1)
+    conv_22 = layers.Conv2D(filters=64, kernel_size=(7, 7), padding="same", name='conv_22')(feat_11)
+    conv_22 = layers.PReLU(shared_axes=[1, 2], name='prelu_22')(conv_22)
+    
+    feat_22 = layers.concatenate([conv_2, conv_22], axis=-1)
+    conv_33 = layers.Conv2D(filters=64, kernel_size=(3, 3), padding="same", name='conv_33')(feat_22)
+    conv_33 = layers.PReLU(shared_axes=[1, 2], name='prelu_33')(conv_33)
+    
+    feat_33 = layers.concatenate([conv_3, conv_33], axis=-1)
+    conv_44 = layers.Conv2D(filters=32, kernel_size=(1, 1), padding="same", name='conv_44')(feat_33)
+    conv_44 = layers.PReLU(shared_axes=[1, 2], name='prelu_44')(conv_44)
+    
+    feat_44 = layers.concatenate([conv_4, conv_44], axis=-1)
+
+    # 输出层
+    conv_10 = layers.Conv2D(filters=3, kernel_size=(5, 5), padding="same", name='conv_out')(feat_44)
+
+    # 使用残差连接
+    output_tensor = layers.Add()([comp_tensor, conv_10])
+
+    # 创建模型
     enhancer = Model(inputs=comp_tensor, outputs=output_tensor)
     return enhancer
 
@@ -229,6 +254,13 @@ def TrainImageEnhancementModel (folderRaw,folderComp,folderRawVal,folderCompVal)
     # Путь для сохранения модели
     checkpoint_filepath = 'best_model.weights.h5'
 
+    # 检查是否有预训练权重
+    if os.path.exists(checkpoint_filepath):
+        print(f"Loading pretrained weights from {checkpoint_filepath}...")
+        enhancer.load_weights(checkpoint_filepath)
+    else:
+        print("No pretrained weights found. Training from scratch...")
+
     # Определяем колбэк для сохранения наилучшей модели
     checkpoint_callback = ModelCheckpoint(
         filepath=checkpoint_filepath,  # куда сохраняем веса
@@ -248,10 +280,10 @@ def TrainImageEnhancementModel (folderRaw,folderComp,folderRawVal,folderCompVal)
 
     return enhancer
 
-def InferenceImageEnhancementModel (fw,fh):
+def InferenceImageEnhancementModel (fw,fh, model_path):
     enhancer = EnhancerModel (fw,fh)
     enhancer.compile(loss='mean_squared_error',optimizer='Adam',metrics=[psnr])
-    enhancer.load_weights('enhancer.weights.h5')
+    enhancer.load_weights(model_path)
 
     return enhancer
 
@@ -402,13 +434,14 @@ if TrainMode==1:
 
 
 if 1:
-    enhancer = InferenceImageEnhancementModel (w,h)
-    #ShowOneFrameEnhancement(trainfolderRawYuv,trainfolderCompYuv,0,0)
-    #ShowOneFrameEnhancement(testfolderRawYuv,testfolderCompYuv,0,0)
-    #ShowOneFrameEnhancement(trainfolderRawYuv, trainfolderCompYuv, 0, 1)
-    #ShowOneFrameEnhancement(testfolderRawYuv, testfolderCompYuv, 0, 1)
-    ShowFramePSNRPerformance (trainfolderRawYuv,trainfolderCompYuv,0,20,w,h)
-    ShowFramePSNRPerformance (testfolderRawYuv,testfolderCompYuv,0,20,w,h)
+    enhancer = InferenceImageEnhancementModel (w,h, "best_model.weights.h5")
+    # enhancer = InferenceImageEnhancementModel (w,h, "enhancer.weights.h5")
+    ShowOneFrameEnhancement(trainfolderRawYuv,trainfolderCompYuv,0,2)
+    ShowOneFrameEnhancement(testfolderRawYuv,testfolderCompYuv,0,2)
+    ShowOneFrameEnhancement(trainfolderRawYuv, trainfolderCompYuv, 0, 1)
+    ShowOneFrameEnhancement(testfolderRawYuv, testfolderCompYuv, 0, 1)
+    # ShowFramePSNRPerformance (trainfolderRawYuv,trainfolderCompYuv,0,20,w,h)
+    # ShowFramePSNRPerformance (testfolderRawYuv,testfolderCompYuv,0,20,w,h)
 
 
 
